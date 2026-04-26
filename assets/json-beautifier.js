@@ -5,174 +5,586 @@
         return String(s)
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
     function indentStr(n, width) { return new Array(n * width + 1).join(' '); }
-
-    function primitiveHtml(value) {
-        if (value === null)             return '<span class="tok-null">null</span>';
-        if (typeof value === 'string')  return '<span class="tok-string">' + escapeHtml(JSON.stringify(value)) + '</span>';
-        if (typeof value === 'number')  return '<span class="tok-number">' + escapeHtml(String(value)) + '</span>';
-        if (typeof value === 'boolean') return '<span class="tok-bool">' + String(value) + '</span>';
-        return escapeHtml(String(value));
-    }
-
-    function renderJson(value, depth, keyLabel, trailingComma, indentWidth, ctr, path) {
-        var pad   = indentStr(depth, indentWidth);
-        var key   = keyLabel !== null
-            ? '<span class="tok-key">' + escapeHtml(JSON.stringify(keyLabel)) + '</span>: '
-            : '';
-        var comma = trailingComma ? ',' : '';
-
-        if (value === null || typeof value !== 'object') {
-            return '<div class="jb-line" data-ln="' + (ctr.n++) + '">' + pad + key + primitiveHtml(value) + comma + '</div>';
-        }
-
-        var isArr  = Array.isArray(value);
-        var keys   = isArr ? value.map(function (_, i) { return i; }) : Object.keys(value);
-        var openB  = isArr ? '[' : '{';
-        var closeB = isArr ? ']' : '}';
-
-        if (keys.length === 0) {
-            return '<div class="jb-line" data-ln="' + (ctr.n++) + '">' + pad + key + openB + closeB + comma + '</div>';
-        }
-
-        var unit     = keys.length === 1 ? (isArr ? ' item' : ' field') : (isArr ? ' items' : ' fields');
-        var summary  = keys.length + unit;
-        var headerLn = ctr.n++;
-        var children = keys.map(function (k, i) {
-            return renderJson(value[k], depth + 1, isArr ? null : k, i < keys.length - 1, indentWidth, ctr, childPath(path, k, isArr));
-        }).join('');
-        var footerLn = ctr.n++;
-
-        return '<div class="jb-block" data-path="' + escapeHtml(path) + '">' +
-            '<div class="jb-line jb-header" data-ln="' + headerLn + '">' + pad +
-                '<button type="button" class="jb-toggle" aria-expanded="true" aria-label="Collapse">▾</button>' +
-                key + openB +
-                '<span class="jb-ellipsis"> ... ' + summary + ' ' + closeB + comma + '</span>' +
-            '</div>' +
-            '<div class="jb-children">' + children + '</div>' +
-            '<div class="jb-line jb-footer" data-ln="' + footerLn + '">' + pad + closeB + comma + '</div>' +
-        '</div>';
-    }
-
-    function formatValue(v) {
-        if (v === null) return 'null';
-        if (typeof v === 'string') return v;
-        return String(v);
-    }
 
     function childPath(parentPath, key, isArr) {
         if (isArr) return parentPath + '[' + key + ']';
         return parentPath ? parentPath + '.' + key : String(key);
     }
 
-    function renderNode(label, value, path) {
-        var pathAttr = ' data-path="' + escapeHtml(path) + '"';
-        if (value !== null && typeof value === 'object') {
-            var isArr = Array.isArray(value);
-            var keys  = isArr ? value.map(function (_, i) { return i; }) : Object.keys(value);
-            var hint  = isArr
-                ? (keys.length ? '[' + keys.length + ']' : '[ ]')
-                : (keys.length ? '{' + keys.length + '}' : '{ }');
-
-            var childrenHtml = keys.map(function (k) {
-                var childLabel = isArr ? '[' + k + ']' : k;
-                return renderNode(childLabel, value[k], childPath(path, k, isArr));
-            }).join('');
-
-            var header = '<div class="fbranch"><span class="fk">' + escapeHtml(label) +
-                         '</span><span class="fhint">' + hint + '</span></div>';
-
-            return '<li class="fnode"' + pathAttr + '>' + header +
-                   (keys.length ? '<ul class="ftree">' + childrenHtml + '</ul>' : '') +
-                   '</li>';
-        }
-
-        return '<li class="fleaf"' + pathAttr + '><span class="fk">' + escapeHtml(label) +
-               '</span><span class="fv">' + escapeHtml(formatValue(value)) + '</span></li>';
+    function toJsonPath(path) {
+        if (!path) return '$';
+        if (path.charAt(0) === '[') return '$' + path;
+        return '$.' + path;
     }
 
-    function renderTree(parsed) {
-        if (parsed === null || typeof parsed !== 'object') {
-            return renderNode('(root)', parsed, '');
+    function pathToKeys(path) {
+        var keys = [];
+        if (!path) return keys;
+        var i = 0;
+        var buf = '';
+        function flush() { if (buf) { keys.push(buf); buf = ''; } }
+        while (i < path.length) {
+            var c = path.charAt(i);
+            if (c === '.') { flush(); i++; }
+            else if (c === '[') {
+                flush();
+                var end = path.indexOf(']', i);
+                if (end < 0) break;
+                keys.push(parseInt(path.substring(i + 1, end), 10));
+                i = end + 1;
+            } else { buf += c; i++; }
         }
-        var isArr = Array.isArray(parsed);
-        var keys  = isArr ? parsed.map(function (_, i) { return i; }) : Object.keys(parsed);
-        if (!keys.length) {
-            return '<li class="fleaf" data-path=""><span class="fk">(root)</span><span class="fv">' +
-                   (isArr ? '[ ]' : '{ }') + '</span></li>';
+        flush();
+        return keys;
+    }
+
+    function getValueAtPath(parsed, keys) {
+        var node = parsed;
+        for (var i = 0; i < keys.length; i++) {
+            if (node === null || typeof node !== 'object') return undefined;
+            node = node[keys[i]];
         }
-        return keys.map(function (k) {
-            var label = isArr ? '[' + k + ']' : k;
-            return renderNode(label, parsed[k], childPath('', k, isArr));
+        return node;
+    }
+
+    function cssEscape(s) {
+        if (window.CSS && CSS.escape) return CSS.escape(s);
+        return String(s).replace(/(["\\\[\]])/g, '\\$1');
+    }
+
+    function highlightText(text, search) {
+        var t = String(text);
+        if (!search) return escapeHtml(t);
+        var lower = t.toLowerCase();
+        var slower = search.toLowerCase();
+        var slen = search.length;
+        var idx = lower.indexOf(slower);
+        if (idx < 0) return escapeHtml(t);
+        var out = '';
+        var i = 0;
+        while (idx >= 0) {
+            out += escapeHtml(t.substring(i, idx));
+            out += '<mark class="jb-match">' + escapeHtml(t.substring(idx, idx + slen)) + '</mark>';
+            i = idx + slen;
+            idx = lower.indexOf(slower, i);
+        }
+        out += escapeHtml(t.substring(i));
+        return out;
+    }
+
+    function primitiveHtml(value, search) {
+        if (value === null) return '<span class="tok-null">null</span>';
+        if (typeof value === 'string') return '<span class="tok-string">' + highlightText(JSON.stringify(value), search) + '</span>';
+        if (typeof value === 'number') return '<span class="tok-number">' + highlightText(String(value), search) + '</span>';
+        if (typeof value === 'boolean') return '<span class="tok-bool">' + highlightText(String(value), search) + '</span>';
+        return escapeHtml(String(value));
+    }
+
+    function buildSearchSets(value, search, basePath) {
+        var matches = [];
+        var matchSet = {};
+        var ancestorSet = {};
+        if (!search) return { matches: matches, matchSet: matchSet, ancestorSet: ancestorSet };
+        var s = search.toLowerCase();
+
+        function check(text) {
+            return text != null && String(text).toLowerCase().indexOf(s) >= 0;
+        }
+
+        function visit(node, path, key, isArrChild) {
+            var keyMatch = (key !== null && !isArrChild && check(key));
+            if (typeof node !== 'object' || node === null) {
+                var valMatch = check(node) || (typeof node === 'string' && check(JSON.stringify(node)));
+                if (keyMatch || valMatch) {
+                    if (!matchSet[path]) {
+                        matchSet[path] = 1;
+                        matches.push(path);
+                    }
+                    return true;
+                }
+                return false;
+            }
+            var any = false;
+            if (keyMatch) {
+                if (!matchSet[path]) {
+                    matchSet[path] = 1;
+                    matches.push(path);
+                }
+                any = true;
+            }
+            var isArr = Array.isArray(node);
+            var keys = isArr ? node.map(function (_, i) { return i; }) : Object.keys(node);
+            keys.forEach(function (k) {
+                if (visit(node[k], childPath(path, k, isArr), k, isArr)) any = true;
+            });
+            if (any) ancestorSet[path] = 1;
+            return any;
+        }
+
+        visit(value, basePath, null, false);
+        return { matches: matches, matchSet: matchSet, ancestorSet: ancestorSet };
+    }
+
+    function renderJson(value, depth, keyLabel, trailingComma, indentWidth, ctr, path, ctx) {
+        var pad = indentStr(depth, indentWidth);
+        var keyHtml = keyLabel !== null
+            ? '<span class="tok-key">' + highlightText(JSON.stringify(keyLabel), ctx.search) + '</span>: '
+            : '';
+        var comma = trailingComma ? ',' : '';
+        var pathAttr = ' data-path="' + escapeHtml(path) + '"';
+        var matchClass = ctx.matchSet[path] ? ' jb-has-match' : '';
+        var copyBtn = '<button type="button" class="jsonb-copy-btn" aria-label="Copy JSONPath" tabindex="-1" title="Copy JSONPath">⧉</button>';
+
+        if (value === null || typeof value !== 'object') {
+            return '<div class="jb-line jb-leaf' + matchClass + '" data-ln="' + (ctr.n++) + '"' + pathAttr + '>' +
+                pad + keyHtml + primitiveHtml(value, ctx.search) + comma + copyBtn +
+                '</div>';
+        }
+
+        var isArr = Array.isArray(value);
+        var keys = isArr ? value.map(function (_, i) { return i; }) : Object.keys(value);
+        var openB = isArr ? '[' : '{';
+        var closeB = isArr ? ']' : '}';
+
+        if (keys.length === 0) {
+            return '<div class="jb-line jb-empty' + matchClass + '" data-ln="' + (ctr.n++) + '"' + pathAttr + '>' +
+                pad + keyHtml + openB + closeB + comma + copyBtn +
+                '</div>';
+        }
+
+        var hasMatchInSubtree = ctx.search && (ctx.ancestorSet[path] || ctx.matchSet[path]);
+        var depthExceeded = ctx.depthLimit > 0 && depth >= ctx.depthLimit;
+
+        if (depthExceeded && !hasMatchInSubtree && depth > 0) {
+            var unit = keys.length === 1 ? (isArr ? ' item' : ' key') : (isArr ? ' items' : ' keys');
+            var summaryText = openB + '...' + closeB + ' (' + keys.length + unit + ')';
+            return '<div class="jb-line jb-summary' + matchClass + '" data-ln="' + (ctr.n++) + '"' + pathAttr + '>' +
+                pad + keyHtml +
+                '<button type="button" class="jb-zoomable" data-zoom="' + escapeHtml(path) + '" title="Zoom into this node">' +
+                escapeHtml(summaryText) + '</button>' +
+                comma + copyBtn +
+                '</div>';
+        }
+
+        var unitFull = keys.length === 1 ? (isArr ? ' item' : ' key') : (isArr ? ' items' : ' keys');
+        var summaryFull = keys.length + unitFull;
+        var headerLn = ctr.n++;
+        var children = keys.map(function (k, i) {
+            return renderJson(value[k], depth + 1, isArr ? null : k, i < keys.length - 1, indentWidth, ctr, childPath(path, k, isArr), ctx);
+        }).join('');
+        var footerLn = ctr.n++;
+
+        var startCollapsed = ctx.search && !hasMatchInSubtree && depth > 0;
+        var toggleArrow = startCollapsed ? '▸' : '▾';
+        var toggleAria  = startCollapsed ? 'false' : 'true';
+        var toggleLabel = startCollapsed ? 'Expand' : 'Collapse';
+
+        var blockClasses = 'jb-block';
+        if (startCollapsed) blockClasses += ' is-collapsed';
+        if (hasMatchInSubtree) blockClasses += ' is-search-match';
+
+        var zoomable = depth > 0
+            ? '<button type="button" class="jb-zoomable" data-zoom="' + escapeHtml(path) + '" title="Zoom into this node">' + openB + '</button>'
+            : '<span class="jb-bracket">' + openB + '</span>';
+
+        return '<div class="' + blockClasses + '"' + pathAttr + '>' +
+            '<div class="jb-line jb-header' + matchClass + '" data-ln="' + headerLn + '"' + pathAttr + '>' + pad +
+                '<button type="button" class="jb-toggle" aria-expanded="' + toggleAria + '" aria-label="' + toggleLabel + '">' + toggleArrow + '</button>' +
+                keyHtml + zoomable +
+                '<span class="jb-ellipsis"> ... ' + summaryFull + ' ' + closeB + comma + '</span>' +
+                copyBtn +
+            '</div>' +
+            '<div class="jb-children">' + children + '</div>' +
+            '<div class="jb-line jb-footer" data-ln="' + footerLn + '"' + pathAttr + '>' + pad + closeB + comma + '</div>' +
+        '</div>';
+    }
+
+    function flattenLeaves(value, basePath, results) {
+        if (value === null || typeof value !== 'object') {
+            results.push({ path: basePath, value: value });
+            return;
+        }
+        var isArr = Array.isArray(value);
+        var keys = isArr ? value.map(function (_, i) { return i; }) : Object.keys(value);
+        if (keys.length === 0) {
+            results.push({ path: basePath, value: value, empty: true, isArr: isArr });
+            return;
+        }
+        keys.forEach(function (k) {
+            flattenLeaves(value[k], childPath(basePath, k, isArr), results);
+        });
+    }
+
+    function formatFlatValue(item) {
+        if (item.empty) return item.isArr ? '[]' : '{}';
+        var v = item.value;
+        if (v === null) return 'null';
+        if (typeof v === 'string') return JSON.stringify(v);
+        return String(v);
+    }
+
+    function renderFlat(items, search) {
+        var s = search ? search.toLowerCase() : '';
+        var html = '';
+        var shown = 0;
+        for (var i = 0; i < items.length; i++) {
+            var item = items[i];
+            var jp = toJsonPath(item.path);
+            var valStr = formatFlatValue(item);
+            if (s && jp.toLowerCase().indexOf(s) < 0 && valStr.toLowerCase().indexOf(s) < 0) continue;
+            shown++;
+            html += '<li class="fleaf" data-copy="' + escapeHtml(jp) + '" data-path="' + escapeHtml(item.path) + '">' +
+                '<button type="button" class="fpath" aria-label="Copy ' + escapeHtml(jp) + '" title="Click to copy path">' +
+                highlightText(jp, search) +
+                '</button>' +
+                '<span class="fv">' + highlightText(valStr, search) + '</span>' +
+                '</li>';
+        }
+        return { html: html, count: shown };
+    }
+
+    function renderBreadcrumbs(parsed, focusKeys) {
+        var crumbs = [{ label: '$', keys: [] }];
+        var node = parsed;
+        for (var i = 0; i < focusKeys.length; i++) {
+            var key = focusKeys[i];
+            var isArr = Array.isArray(node);
+            var label = isArr ? '[' + key + ']' : String(key);
+            crumbs.push({ label: label, keys: focusKeys.slice(0, i + 1) });
+            node = (node !== null && typeof node === 'object') ? node[key] : undefined;
+        }
+        return crumbs.map(function (c, idx) {
+            var isLast = idx === crumbs.length - 1;
+            var item = '<li class="jsonb-bc-item' + (isLast ? ' is-current' : '') + '">' +
+                '<button type="button" class="jsonb-bc-btn" data-keys="' + escapeHtml(JSON.stringify(c.keys)) + '"' +
+                (isLast ? ' aria-current="location"' : '') + '>' +
+                escapeHtml(c.label) + '</button></li>';
+            if (idx < crumbs.length - 1) {
+                item += '<li class="jsonb-bc-sep" aria-hidden="true">›</li>';
+            }
+            return item;
         }).join('');
     }
 
     function attach(root) {
-        var indent   = parseInt(root.getAttribute('data-indent'), 10) || 2;
-        var flattenOn = root.getAttribute('data-flatten') === 'true';
-        var input    = root.querySelector('.jsonb-input');
-        var output   = root.querySelector('.jsonb-output');
-        var status   = root.querySelector('.jsonb-status');
-        var flatList = root.querySelector('.jsonb-flat-list');
+        var indent     = parseInt(root.getAttribute('data-indent'), 10) || 2;
+        var flattenOn  = root.getAttribute('data-flatten') === 'true';
+        var input      = root.querySelector('.jsonb-input');
+        var output     = root.querySelector('.jsonb-output');
+        var status     = root.querySelector('.jsonb-status');
+        var flatList   = root.querySelector('.jsonb-flat-list');
+        var flatCount  = root.querySelector('.jsonb-flat-count');
+        var searchInput= root.querySelector('.jsonb-search');
+        var matchCount = root.querySelector('.jsonb-match-count');
+        var matchPrev  = root.querySelector('.jsonb-match-prev');
+        var matchNext  = root.querySelector('.jsonb-match-next');
+        var depthSelect= root.querySelector('.jsonb-depth-select');
+        var bcList     = root.querySelector('.jsonb-bc-list');
+        var bcReset    = root.querySelector('.jsonb-bc-reset');
+        var toast      = root.querySelector('.jsonb-toast');
 
-        function render() {
+        var state = {
+            parsed: null,
+            valid: false,
+            focusPath: [],
+            depthLimit: 0,
+            search: '',
+            searchSets: { matches: [], matchSet: {}, ancestorSet: {} },
+            activeMatch: -1
+        };
+
+        var searchTimer = null;
+        var toastTimer  = null;
+
+        function showToast(msg) {
+            if (!toast) return;
+            toast.textContent = msg;
+            toast.classList.add('is-visible');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(function () {
+                toast.classList.remove('is-visible');
+            }, 1500);
+        }
+
+        function copyToClipboard(text) {
+            var done = function () { showToast('Copied: ' + text); };
+            var fail = function () { fallbackCopy(text); };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                try {
+                    navigator.clipboard.writeText(text).then(done, fail);
+                    return;
+                } catch (e) { /* fall through */ }
+            }
+            fallbackCopy(text);
+        }
+
+        function fallbackCopy(text) {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            var ok = false;
+            try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+            document.body.removeChild(ta);
+            showToast(ok ? 'Copied: ' + text : 'Copy failed');
+        }
+
+        function focusedValue() { return getValueAtPath(state.parsed, state.focusPath); }
+
+        function basePath() {
+            var node = state.parsed;
+            var path = '';
+            for (var i = 0; i < state.focusPath.length; i++) {
+                var key = state.focusPath[i];
+                var isArr = Array.isArray(node);
+                path = childPath(path, key, isArr);
+                node = (node !== null && typeof node === 'object') ? node[key] : undefined;
+            }
+            return path;
+        }
+
+        function parse() {
             var raw = input.value;
-
             if (raw.trim() === '') {
-                output.innerHTML = '';
+                state.parsed = null;
+                state.valid = false;
+                state.focusPath = [];
                 if (status) { status.textContent = ''; status.className = 'jsonb-status'; }
-                if (flatList) flatList.innerHTML = '';
                 return;
             }
-
             try {
-                var parsed = JSON.parse(raw);
-                output.innerHTML = renderJson(parsed, 0, null, false, indent, { n: 1 }, '');
-
-                if (status) {
-                    status.textContent = 'Valid JSON';
-                    status.className = 'jsonb-status is-ok';
-                }
-
-                if (flattenOn && flatList) {
-                    flatList.innerHTML = renderTree(parsed);
+                state.parsed = JSON.parse(raw);
+                state.valid = true;
+                if (status) { status.textContent = 'Valid JSON'; status.className = 'jsonb-status is-ok'; }
+                var node = state.parsed;
+                for (var i = 0; i < state.focusPath.length; i++) {
+                    if (node === null || typeof node !== 'object' || !(state.focusPath[i] in node)) {
+                        state.focusPath = state.focusPath.slice(0, i);
+                        break;
+                    }
+                    node = node[state.focusPath[i]];
                 }
             } catch (e) {
-                if (status) {
-                    status.textContent = e.message;
-                    status.className = 'jsonb-status is-error';
-                }
+                state.valid = false;
+                if (status) { status.textContent = e.message; status.className = 'jsonb-status is-error'; }
             }
         }
 
-        input.addEventListener('input', render);
-        render();
-
-        function syncFlat(path, collapsed) {
-            if (!flatList) return;
-            if (path === '') {
-                flatList.classList.toggle('is-collapsed', collapsed);
+        function render() {
+            if (!state.valid) {
+                output.innerHTML = '';
+                if (flatList) flatList.innerHTML = '';
+                if (flatCount) flatCount.textContent = '';
+                if (bcList) bcList.innerHTML = '';
+                state.searchSets = { matches: [], matchSet: {}, ancestorSet: {} };
+                updateMatchUI();
                 return;
             }
-            var sel = '[data-path="' + (window.CSS && CSS.escape ? CSS.escape(path) : path.replace(/"/g, '\\"')) + '"]';
-            var node = flatList.querySelector('.fnode' + sel);
-            if (node) node.classList.toggle('is-collapsed', collapsed);
+
+            var fv = focusedValue();
+            var bp = basePath();
+
+            state.searchSets = buildSearchSets(fv, state.search, bp);
+            if (state.search && state.searchSets.matches.length > 0) {
+                if (state.activeMatch < 0 || state.activeMatch >= state.searchSets.matches.length) state.activeMatch = 0;
+            } else {
+                state.activeMatch = -1;
+            }
+
+            if (bcList) bcList.innerHTML = renderBreadcrumbs(state.parsed, state.focusPath);
+
+            var ctx = {
+                search: state.search,
+                matchSet: state.searchSets.matchSet,
+                ancestorSet: state.searchSets.ancestorSet,
+                depthLimit: state.depthLimit
+            };
+            output.innerHTML = renderJson(fv, 0, null, false, indent, { n: 1 }, bp, ctx);
+
+            if (flattenOn && flatList) {
+                var items = [];
+                flattenLeaves(fv, bp, items);
+                var flatRender = renderFlat(items, state.search);
+                flatList.innerHTML = flatRender.html;
+                if (flatCount) {
+                    if (state.search) {
+                        flatCount.textContent = flatRender.count + ' / ' + items.length + ' rows';
+                    } else {
+                        flatCount.textContent = items.length + ' row' + (items.length === 1 ? '' : 's');
+                    }
+                }
+            }
+
+            updateMatchUI();
+            if (state.activeMatch >= 0) markActiveMatch(false);
         }
 
-        output.addEventListener('click', function (e) {
-            var btn = e.target.closest('.jb-toggle');
-            if (!btn) return;
-            var block = btn.closest('.jb-block');
-            if (!block) return;
-            var collapsed = block.classList.toggle('is-collapsed');
-            btn.textContent = collapsed ? '▸' : '▾';
-            btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-            btn.setAttribute('aria-label', collapsed ? 'Expand' : 'Collapse');
-            syncFlat(block.getAttribute('data-path') || '', collapsed);
+        function updateMatchUI() {
+            var n = state.searchSets.matches.length;
+            if (!state.search) {
+                matchCount.textContent = '';
+                matchPrev.disabled = true;
+                matchNext.disabled = true;
+                return;
+            }
+            if (n === 0) {
+                matchCount.textContent = '0 matches';
+                matchPrev.disabled = true;
+                matchNext.disabled = true;
+            } else {
+                matchCount.textContent = (state.activeMatch + 1) + ' of ' + n + ' matches';
+                matchPrev.disabled = false;
+                matchNext.disabled = false;
+            }
+        }
+
+        function markActiveMatch(scroll) {
+            output.querySelectorAll('.jb-active-match').forEach(function (el) { el.classList.remove('jb-active-match'); });
+            output.querySelectorAll('.jb-match.is-active').forEach(function (el) { el.classList.remove('is-active'); });
+            if (state.activeMatch < 0 || state.activeMatch >= state.searchSets.matches.length) return;
+            var path = state.searchSets.matches[state.activeMatch];
+            var sel = '[data-path="' + cssEscape(path) + '"]';
+            var line = output.querySelector('.jb-line' + sel);
+            if (!line) return;
+            line.classList.add('jb-active-match');
+            var firstMark = line.querySelector('.jb-match');
+            if (firstMark) firstMark.classList.add('is-active');
+            if (scroll) line.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        function gotoMatch(delta) {
+            var n = state.searchSets.matches.length;
+            if (n === 0) return;
+            if (state.activeMatch < 0) state.activeMatch = 0;
+            else state.activeMatch = (state.activeMatch + delta + n) % n;
+            updateMatchUI();
+            markActiveMatch(true);
+        }
+
+        function setFocusKeys(keys) {
+            state.focusPath = keys;
+            state.activeMatch = -1;
+            render();
+        }
+
+        input.addEventListener('input', function () {
+            parse();
+            render();
         });
+
+        searchInput.addEventListener('input', function () {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(function () {
+                var v = searchInput.value.trim();
+                if (v === state.search) return;
+                state.search = v;
+                state.activeMatch = -1;
+                render();
+            }, 300);
+        });
+
+        searchInput.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (searchTimer) {
+                    clearTimeout(searchTimer);
+                    searchTimer = null;
+                    var v = searchInput.value.trim();
+                    if (v !== state.search) {
+                        state.search = v;
+                        state.activeMatch = -1;
+                        render();
+                        return;
+                    }
+                }
+                gotoMatch(e.shiftKey ? -1 : 1);
+            } else if (e.key === 'Escape') {
+                if (searchInput.value !== '') {
+                    e.preventDefault();
+                    searchInput.value = '';
+                    state.search = '';
+                    state.activeMatch = -1;
+                    render();
+                }
+            }
+        });
+
+        matchPrev.addEventListener('click', function () { gotoMatch(-1); });
+        matchNext.addEventListener('click', function () { gotoMatch(1); });
+
+        depthSelect.addEventListener('change', function () {
+            state.depthLimit = parseInt(depthSelect.value, 10) || 0;
+            render();
+        });
+
+        bcReset.addEventListener('click', function () {
+            if (state.focusPath.length === 0) return;
+            setFocusKeys([]);
+        });
+
+        bcList.addEventListener('click', function (e) {
+            var btn = e.target.closest('.jsonb-bc-btn');
+            if (!btn) return;
+            var keys;
+            try { keys = JSON.parse(btn.getAttribute('data-keys') || '[]'); }
+            catch (err) { keys = []; }
+            setFocusKeys(keys);
+        });
+
+        bcList.addEventListener('keydown', function (e) {
+            var btns = Array.prototype.slice.call(bcList.querySelectorAll('.jsonb-bc-btn'));
+            var idx = btns.indexOf(document.activeElement);
+            if (idx < 0) return;
+            if (e.key === 'ArrowRight' && idx < btns.length - 1) { e.preventDefault(); btns[idx + 1].focus(); }
+            else if (e.key === 'ArrowLeft' && idx > 0) { e.preventDefault(); btns[idx - 1].focus(); }
+        });
+
+        output.addEventListener('click', function (e) {
+            var toggle = e.target.closest('.jb-toggle');
+            if (toggle) {
+                var block = toggle.closest('.jb-block');
+                if (block) {
+                    var collapsed = block.classList.toggle('is-collapsed');
+                    toggle.textContent = collapsed ? '▸' : '▾';
+                    toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+                    toggle.setAttribute('aria-label', collapsed ? 'Expand' : 'Collapse');
+                }
+                e.stopPropagation();
+                return;
+            }
+            var copyBtn = e.target.closest('.jsonb-copy-btn');
+            if (copyBtn) {
+                var line = copyBtn.closest('[data-path]');
+                if (line) copyToClipboard(toJsonPath(line.getAttribute('data-path') || ''));
+                e.stopPropagation();
+                return;
+            }
+            var zoom = e.target.closest('.jb-zoomable');
+            if (zoom) {
+                var zPath = zoom.getAttribute('data-zoom') || '';
+                setFocusKeys(pathToKeys(zPath));
+                e.stopPropagation();
+                return;
+            }
+        });
+
+        if (flatList) {
+            flatList.addEventListener('click', function (e) {
+                var btn = e.target.closest('.fpath');
+                if (!btn) return;
+                var li = btn.closest('[data-copy]');
+                if (li) copyToClipboard(li.getAttribute('data-copy') || '');
+            });
+        }
 
         root.querySelectorAll('.jsonb-foldall').forEach(function (btn) {
             btn.addEventListener('click', function () {
@@ -185,12 +597,6 @@
                     t.setAttribute('aria-expanded', collapse ? 'false' : 'true');
                     t.setAttribute('aria-label', collapse ? 'Expand' : 'Collapse');
                 });
-                if (flatList) {
-                    flatList.querySelectorAll('.fnode').forEach(function (n) {
-                        n.classList.toggle('is-collapsed', collapse);
-                    });
-                    flatList.classList.toggle('is-collapsed', collapse);
-                }
             });
         });
 
@@ -208,6 +614,8 @@
 
         document.addEventListener('keydown', function (e) {
             if (e.key !== 'Escape') return;
+            var any = root.querySelector('.is-expanded');
+            if (!any) return;
             root.querySelectorAll('.is-expanded').forEach(function (el) {
                 el.classList.remove('is-expanded');
                 var btn = el.querySelector('.jsonb-expand');
@@ -215,6 +623,9 @@
             });
             document.body.classList.remove('jsonb-locked');
         });
+
+        parse();
+        render();
     }
 
     function init() {

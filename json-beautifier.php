@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: JSON Beautifier
- * Description: Shortcode [json_beautifier] that renders a live JSON formatter with a flattened key/value view.
- * Version:     1.6.1
+ * Description: Shortcode [json_beautifier] that renders a live JSON formatter with focus/zoom, depth limiting, search and click-to-copy JSONPath.
+ * Version:     2.0.0
  * Author:      Chen
  * License:     GPL-2.0-or-later
  * Text Domain: json-beautifier
@@ -12,7 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'JSONB_VERSION', '1.6.1' );
+define( 'JSONB_VERSION', '2.0.0' );
 define( 'JSONB_URL', plugin_dir_url( __FILE__ ) );
 define( 'JSONB_PATH', plugin_dir_path( __FILE__ ) );
 
@@ -53,7 +53,7 @@ function jsonb_shortcode( $atts ) {
     $indent      = (int) $atts['indent'];
     $flatten     = filter_var( $atts['flatten'], FILTER_VALIDATE_BOOLEAN );
 
-    $sample = "{\n  \"name\": \"Ada Lovelace\",\n  \"role\": \"engineer\",\n  \"active\": true,\n  \"skills\": [\"math\", \"code\"]\n}";
+    $sample = "{\n  \"name\": \"Ada Lovelace\",\n  \"role\": \"engineer\",\n  \"active\": true,\n  \"skills\": [\"math\", \"code\"],\n  \"team\": {\n    \"name\": \"Analytical Engine\",\n    \"members\": [\n      {\"id\": 1, \"name\": \"Charles\"},\n      {\"id\": 2, \"name\": \"Ada\"}\n    ]\n  }\n}";
 
     ob_start();
     ?>
@@ -72,14 +72,45 @@ function jsonb_shortcode( $atts ) {
                           placeholder="Paste JSON here..."><?php echo esc_textarea( $sample ); ?></textarea>
             </div>
         </div>
+        <div class="jsonb-search-bar" role="search">
+            <input type="search"
+                   class="jsonb-search"
+                   placeholder="Search keys and values..."
+                   aria-label="Search keys and values" />
+            <span class="jsonb-match-count" aria-live="polite"></span>
+            <button type="button" class="jsonb-match-prev" aria-label="Previous match" title="Previous match (Shift+Enter)" disabled>↑</button>
+            <button type="button" class="jsonb-match-next" aria-label="Next match" title="Next match (Enter)" disabled>↓</button>
+        </div>
         <div class="jsonb-panes" style="--jsonb-height: <?php echo $height; ?>;">
             <div class="jsonb-pane" data-section="output">
                 <div class="jsonb-label-row">
                     <span class="jsonb-label">Beautified</span>
                     <span class="jsonb-status" aria-live="polite"></span>
-                    <button type="button" class="jsonb-foldall" data-action="collapse" title="Collapse all">−</button>
-                    <button type="button" class="jsonb-foldall" data-action="expand" title="Expand all">+</button>
+                    <button type="button" class="jsonb-foldall" data-action="collapse" aria-label="Collapse all" title="Collapse all">−</button>
+                    <button type="button" class="jsonb-foldall" data-action="expand" aria-label="Expand all" title="Expand all">+</button>
                     <button type="button" class="jsonb-expand" aria-label="Expand" title="Expand">⛶</button>
+                </div>
+                <div class="jsonb-output-controls">
+                    <nav class="jsonb-breadcrumbs" aria-label="JSON focus path">
+                        <button type="button" class="jsonb-bc-reset" aria-label="Reset focus to root" title="Reset to root">⌂</button>
+                        <ol class="jsonb-bc-list"></ol>
+                    </nav>
+                    <label class="jsonb-depth-label">
+                        <span class="jsonb-depth-text">Depth</span>
+                        <select class="jsonb-depth-select" aria-label="Render depth from focus">
+                            <option value="0" selected>All</option>
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                            <option value="5">5</option>
+                            <option value="6">6</option>
+                            <option value="7">7</option>
+                            <option value="8">8</option>
+                            <option value="9">9</option>
+                            <option value="10">10</option>
+                        </select>
+                    </label>
                 </div>
                 <div class="jsonb-output" aria-live="polite"></div>
             </div>
@@ -87,12 +118,14 @@ function jsonb_shortcode( $atts ) {
                 <div class="jsonb-flat" data-section="flat">
                     <div class="jsonb-label-row">
                         <span class="jsonb-label">Flattened values</span>
+                        <span class="jsonb-flat-count" aria-live="polite"></span>
                         <button type="button" class="jsonb-expand" aria-label="Expand" title="Expand">⛶</button>
                     </div>
                     <ul class="jsonb-flat-list"></ul>
                 </div>
             <?php endif; ?>
         </div>
+        <div class="jsonb-toast" role="status" aria-live="polite"></div>
     </div>
     <?php
     return ob_get_clean();
