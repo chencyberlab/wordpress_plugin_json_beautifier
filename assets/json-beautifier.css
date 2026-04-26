@@ -12,11 +12,33 @@
 .jsonb-panes {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 12px;
+    grid-template-rows: auto auto auto 1fr;
+    column-gap: 12px;
+    row-gap: 0;
+}
+
+.jsonb-panes > .jsonb-pane,
+.jsonb-panes > .jsonb-flat {
+    display: grid;
+    grid-template-rows: subgrid;
+    grid-row: 1 / -1;
+}
+
+.jsonb-panes > .jsonb-flat > .jsonb-flat-list {
+    grid-row: 4;
 }
 
 @media (max-width: 720px) {
-    .jsonb-panes { grid-template-columns: 1fr; }
+    .jsonb-panes {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto;
+    }
+    .jsonb-panes > .jsonb-pane,
+    .jsonb-panes > .jsonb-flat {
+        display: flex;
+        flex-direction: column;
+    }
+    .jsonb-panes > .jsonb-flat > .jsonb-flat-list { grid-row: auto; }
 }
 
 .jsonb-pane {

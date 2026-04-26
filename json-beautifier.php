@@ -2,7 +2,7 @@
 /**
  * Plugin Name: JSON Beautifier
  * Description: Shortcode [json_beautifier] that renders a live JSON formatter with focus/zoom, depth limiting, search and click-to-copy JSONPath.
- * Version:     2.1.0
+ * Version:     2.1.1
  * Author:      Chen
  * License:     GPL-2.0-or-later
  * Text Domain: json-beautifier
@@ -12,7 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'JSONB_VERSION', '2.1.0' );
+define( 'JSONB_VERSION', '2.1.1' );
 define( 'JSONB_URL', plugin_dir_url( __FILE__ ) );
 define( 'JSONB_PATH', plugin_dir_path( __FILE__ ) );
 
