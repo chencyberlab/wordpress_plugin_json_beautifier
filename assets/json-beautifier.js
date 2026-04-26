@@ -249,6 +249,94 @@
         return { html: html, count: shown };
     }
 
+    function collectAllPaths(value, basePath, baseKeys, baseIsArr, results, limit) {
+        if (results.length >= limit) return;
+        if (value === null || typeof value !== 'object') return;
+        var isArr = Array.isArray(value);
+        var keys = isArr ? value.map(function (_, i) { return i; }) : Object.keys(value);
+        for (var i = 0; i < keys.length; i++) {
+            if (results.length >= limit) return;
+            var k = keys[i];
+            var newKeys = baseKeys.concat([k]);
+            var newIsArr = baseIsArr.concat([isArr]);
+            var newPath = childPath(basePath, k, isArr);
+            var v = value[k];
+            var isBranch = v !== null && typeof v === 'object';
+            var hint;
+            if (isBranch) {
+                var ck = Array.isArray(v) ? v.length : Object.keys(v).length;
+                hint = Array.isArray(v)
+                    ? '[' + ck + (ck === 1 ? ' item' : ' items') + ']'
+                    : '{' + ck + (ck === 1 ? ' key' : ' keys') + '}';
+            } else if (v === null) {
+                hint = 'null';
+            } else if (typeof v === 'string') {
+                hint = JSON.stringify(v.length > 32 ? v.slice(0, 32) + '…' : v);
+            } else {
+                hint = String(v);
+            }
+            results.push({
+                path: newPath,
+                keys: newKeys,
+                isArrAt: newIsArr,
+                isBranch: isBranch,
+                hint: hint
+            });
+            collectAllPaths(v, newPath, newKeys, newIsArr, results, limit);
+        }
+    }
+
+    function splitPathQuery(q) {
+        return q.split('/').map(function (s) { return s.trim(); });
+    }
+
+    function matchPathfinder(inputSegs, resultKeys) {
+        if (inputSegs.length !== resultKeys.length) return null;
+        var spans = [];
+        for (var i = 0; i < inputSegs.length; i++) {
+            var iseg = inputSegs[i].toLowerCase();
+            var rseg = String(resultKeys[i]);
+            if (!iseg) { spans.push(-1); continue; }
+            var idx = rseg.toLowerCase().indexOf(iseg);
+            if (idx < 0) return null;
+            spans.push(idx);
+        }
+        return spans;
+    }
+
+    function highlightSegment(seg, queryLower, matchIdx) {
+        var s = String(seg);
+        if (matchIdx < 0 || !queryLower) return escapeHtml(s);
+        var len = queryLower.length;
+        return escapeHtml(s.substring(0, matchIdx)) +
+            '<mark class="jb-match">' + escapeHtml(s.substring(matchIdx, matchIdx + len)) + '</mark>' +
+            escapeHtml(s.substring(matchIdx + len));
+    }
+
+    function renderPathfinderResults(results, inputSegs, activeIdx) {
+        if (results.length === 0) {
+            return '<li class="jsonb-pf-empty" role="presentation">No matching paths</li>';
+        }
+        return results.map(function (r, i) {
+            var parts = r.keys.map(function (k, j) {
+                var iseg = inputSegs[j];
+                var matchIdx = (r.spans && r.spans[j] != null) ? r.spans[j] : -1;
+                var isArrChild = r.isArrAt && r.isArrAt[j];
+                var label = isArrChild ? '[' + k + ']' : String(k);
+                var sep = j === 0 ? '' : (isArrChild ? '' : '<span class="jsonb-pf-sep">/</span>');
+                return sep + '<span class="jsonb-pf-seg">' + highlightSegment(label, iseg ? iseg.toLowerCase() : '', matchIdx) + '</span>';
+            }).join('');
+            var icon = r.isBranch ? '<span class="jsonb-pf-icon jsonb-pf-branch" aria-hidden="true">›</span>' : '<span class="jsonb-pf-icon jsonb-pf-leaf" aria-hidden="true">·</span>';
+            return '<li class="jsonb-pf-result' + (i === activeIdx ? ' is-active' : '') +
+                '" role="option" aria-selected="' + (i === activeIdx ? 'true' : 'false') +
+                '" data-pf-idx="' + i + '">' +
+                icon +
+                '<span class="jsonb-pf-path">' + parts + '</span>' +
+                '<span class="jsonb-pf-hint">' + escapeHtml(r.hint) + '</span>' +
+                '</li>';
+        }).join('');
+    }
+
     function renderBreadcrumbs(parsed, focusKeys) {
         var crumbs = [{ label: '$', keys: [] }];
         var node = parsed;
@@ -287,6 +375,10 @@
         var depthSelect= root.querySelector('.jsonb-depth-select');
         var bcList     = root.querySelector('.jsonb-bc-list');
         var bcReset    = root.querySelector('.jsonb-bc-reset');
+        var pfWrap     = root.querySelector('.jsonb-pathfinder');
+        var pfInput    = root.querySelector('.jsonb-pathfinder-input');
+        var pfResults  = root.querySelector('.jsonb-pathfinder-results');
+        var pfClear    = root.querySelector('.jsonb-pathfinder-clear');
         var toast      = root.querySelector('.jsonb-toast');
 
         var state = {
@@ -301,6 +393,11 @@
 
         var searchTimer = null;
         var toastTimer  = null;
+        var pfTimer     = null;
+        var pfState     = { open: false, results: [], activeIdx: 0, query: '' };
+        var pfPathCache = null;
+        var pfCacheKey  = null;
+        var PF_LIMIT    = 200;
 
         function showToast(msg) {
             if (!toast) return;
@@ -623,6 +720,263 @@
             });
             document.body.classList.remove('jsonb-locked');
         });
+
+        // Pathfinder
+        function pfBuildIndex() {
+            var key = JSON.stringify(state.focusPath);
+            if (pfCacheKey === key && pfPathCache) return pfPathCache;
+            var bp = basePath();
+            var arr = [];
+            collectAllPaths(focusedValue(), bp, [], [], arr, 5000);
+            pfPathCache = arr;
+            pfCacheKey = key;
+            return arr;
+        }
+
+        function pfInvalidateIndex() {
+            pfPathCache = null;
+            pfCacheKey = null;
+        }
+
+        function pfCompute() {
+            var raw = pfInput.value;
+            var inputSegs = splitPathQuery(raw);
+            var index = pfBuildIndex();
+            var results = [];
+            for (var i = 0; i < index.length; i++) {
+                if (results.length >= PF_LIMIT) break;
+                var spans = matchPathfinder(inputSegs, index[i].keys);
+                if (!spans) continue;
+                var entry = {
+                    path: index[i].path,
+                    keys: index[i].keys,
+                    isArrAt: index[i].isArrAt,
+                    isBranch: index[i].isBranch,
+                    hint: index[i].hint,
+                    spans: spans,
+                    depth: index[i].keys.length
+                };
+                results.push(entry);
+            }
+            results.sort(function (a, b) {
+                if (a.depth !== b.depth) return a.depth - b.depth;
+                return 0;
+            });
+            pfState.results = results;
+            pfState.query = raw;
+            pfState.activeIdx = results.length ? 0 : -1;
+            pfState.inputSegs = inputSegs;
+        }
+
+        function pfRender() {
+            if (!pfState.open) {
+                pfResults.hidden = true;
+                pfInput.setAttribute('aria-expanded', 'false');
+                return;
+            }
+            pfResults.hidden = false;
+            pfInput.setAttribute('aria-expanded', 'true');
+            pfResults.innerHTML = renderPathfinderResults(pfState.results, pfState.inputSegs || [], pfState.activeIdx);
+            pfClear.hidden = pfInput.value === '';
+        }
+
+        function pfOpen() {
+            if (!state.valid) return;
+            pfState.open = true;
+            pfCompute();
+            pfRender();
+        }
+
+        function pfClose() {
+            pfState.open = false;
+            pfRender();
+        }
+
+        function pfRefresh() {
+            if (!pfState.open) return;
+            pfCompute();
+            pfRender();
+            pfScrollActive();
+        }
+
+        function pfScrollActive() {
+            if (pfState.activeIdx < 0) return;
+            var el = pfResults.querySelector('.jsonb-pf-result.is-active');
+            if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+        }
+
+        function pfSelect(idx, drillIn) {
+            var r = pfState.results[idx];
+            if (!r) return;
+            if (drillIn) {
+                var labels = r.keys.map(function (k, j) {
+                    return r.isArrAt[j] ? '[' + k + ']' : String(k);
+                });
+                pfInput.value = labels.join('/') + '/';
+                pfRefresh();
+                return;
+            }
+            // Navigate: leaves zoom into parent and scroll; branches zoom into self
+            var targetKeys, scrollTo;
+            if (r.isBranch) {
+                targetKeys = state.focusPath.concat(r.keys);
+                scrollTo = null;
+            } else {
+                targetKeys = state.focusPath.concat(r.keys.slice(0, -1));
+                scrollTo = state.focusPath.concat(r.keys);
+            }
+            pfClose();
+            pfInput.value = '';
+            pfClear.hidden = true;
+            state.focusPath = targetKeys;
+            state.activeMatch = -1;
+            render();
+            if (scrollTo) {
+                var fullPath = '';
+                var node = state.parsed;
+                for (var j = 0; j < scrollTo.length; j++) {
+                    var isArrParent = Array.isArray(node);
+                    fullPath = childPath(fullPath, scrollTo[j], isArrParent);
+                    node = (node !== null && typeof node === 'object') ? node[scrollTo[j]] : undefined;
+                }
+                var sel = '[data-path="' + cssEscape(fullPath) + '"]';
+                var line = output.querySelector('.jb-line' + sel);
+                if (line) {
+                    line.classList.add('jb-active-match');
+                    line.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    setTimeout(function () { line.classList.remove('jb-active-match'); }, 1800);
+                }
+            }
+        }
+
+        function pfTryAutocomplete() {
+            var raw = pfInput.value;
+            var segs = splitPathQuery(raw);
+            if (segs.length === 0) return false;
+            var lastIdx = segs.length - 1;
+            var lastSeg = segs[lastIdx];
+            if (!lastSeg) return false;
+            // Find unique key at this level among current results
+            var seen = {};
+            var unique = null;
+            for (var i = 0; i < pfState.results.length; i++) {
+                var r = pfState.results[i];
+                if (r.keys.length <= lastIdx) continue;
+                var label = r.isArrAt[lastIdx] ? '[' + r.keys[lastIdx] + ']' : String(r.keys[lastIdx]);
+                if (!seen[label]) {
+                    seen[label] = 1;
+                    if (unique === null) unique = label;
+                    else { unique = false; break; }
+                }
+            }
+            if (!unique) return false;
+            segs[lastIdx] = unique;
+            pfInput.value = segs.join('/') + '/';
+            pfRefresh();
+            return true;
+        }
+
+        pfInput.addEventListener('focus', function () { pfOpen(); });
+
+        pfInput.addEventListener('input', function () {
+            clearTimeout(pfTimer);
+            pfTimer = setTimeout(function () {
+                if (!pfState.open) pfOpen();
+                else pfRefresh();
+            }, 80);
+        });
+
+        pfInput.addEventListener('keydown', function (e) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (!pfState.open) { pfOpen(); return; }
+                if (pfState.results.length) {
+                    pfState.activeIdx = (pfState.activeIdx + 1) % pfState.results.length;
+                    pfRender();
+                    pfScrollActive();
+                }
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (!pfState.open) { pfOpen(); return; }
+                if (pfState.results.length) {
+                    var n = pfState.results.length;
+                    pfState.activeIdx = (pfState.activeIdx - 1 + n) % n;
+                    pfRender();
+                    pfScrollActive();
+                }
+            } else if (e.key === 'Enter') {
+                if (!pfState.open || pfState.activeIdx < 0) return;
+                e.preventDefault();
+                pfSelect(pfState.activeIdx, false);
+            } else if (e.key === 'Tab') {
+                if (!pfState.open || pfState.activeIdx < 0) return;
+                e.preventDefault();
+                pfSelect(pfState.activeIdx, true);
+            } else if (e.key === '/') {
+                if (!pfState.open) return;
+                if (pfTryAutocomplete()) e.preventDefault();
+            } else if (e.key === 'Escape') {
+                if (pfState.open) {
+                    e.preventDefault();
+                    if (pfInput.value !== '') {
+                        pfInput.value = '';
+                        pfRefresh();
+                    } else {
+                        pfClose();
+                        pfInput.blur();
+                    }
+                }
+            }
+        });
+
+        pfResults.addEventListener('mousedown', function (e) {
+            // mousedown so click happens before blur
+            var li = e.target.closest('.jsonb-pf-result');
+            if (!li) return;
+            e.preventDefault();
+            var idx = parseInt(li.getAttribute('data-pf-idx'), 10);
+            pfSelect(idx, e.metaKey || e.ctrlKey);
+        });
+
+        pfResults.addEventListener('mousemove', function (e) {
+            var li = e.target.closest('.jsonb-pf-result');
+            if (!li) return;
+            var idx = parseInt(li.getAttribute('data-pf-idx'), 10);
+            if (idx === pfState.activeIdx) return;
+            pfState.activeIdx = idx;
+            pfRender();
+        });
+
+        pfClear.addEventListener('mousedown', function (e) {
+            e.preventDefault();
+            pfInput.value = '';
+            pfClear.hidden = true;
+            pfInput.focus();
+            pfRefresh();
+        });
+
+        document.addEventListener('mousedown', function (e) {
+            if (!pfState.open) return;
+            if (pfWrap.contains(e.target)) return;
+            pfClose();
+        });
+
+        // Cmd/Ctrl+P opens the pathfinder
+        root.addEventListener('keydown', function (e) {
+            if ((e.metaKey || e.ctrlKey) && (e.key === 'p' || e.key === 'P')) {
+                e.preventDefault();
+                pfInput.focus();
+                pfInput.select();
+            }
+        });
+
+        // Invalidate path index whenever focus or parse changes
+        var origRender = render;
+        render = function () {
+            pfInvalidateIndex();
+            origRender();
+            if (pfState.open) pfRefresh();
+        };
 
         parse();
         render();

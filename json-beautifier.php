@@ -2,7 +2,7 @@
 /**
  * Plugin Name: JSON Beautifier
  * Description: Shortcode [json_beautifier] that renders a live JSON formatter with focus/zoom, depth limiting, search and click-to-copy JSONPath.
- * Version:     2.0.0
+ * Version:     2.1.0
  * Author:      Chen
  * License:     GPL-2.0-or-later
  * Text Domain: json-beautifier
@@ -12,7 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'JSONB_VERSION', '2.0.0' );
+define( 'JSONB_VERSION', '2.1.0' );
 define( 'JSONB_URL', plugin_dir_url( __FILE__ ) );
 define( 'JSONB_PATH', plugin_dir_path( __FILE__ ) );
 
@@ -111,6 +111,24 @@ function jsonb_shortcode( $atts ) {
                             <option value="10">10</option>
                         </select>
                     </label>
+                </div>
+                <div class="jsonb-pathfinder">
+                    <span class="jsonb-pathfinder-icon" aria-hidden="true">⌕</span>
+                    <input type="text"
+                           class="jsonb-pathfinder-input"
+                           autocomplete="off"
+                           spellcheck="false"
+                           placeholder="Jump to path: type segments like org/conf/sales"
+                           aria-label="Jump to JSON path"
+                           aria-controls="<?php echo esc_attr( $instance_id ); ?>-pf-results"
+                           aria-expanded="false"
+                           aria-autocomplete="list" />
+                    <button type="button" class="jsonb-pathfinder-clear" aria-label="Clear path" hidden>✕</button>
+                    <ul id="<?php echo esc_attr( $instance_id ); ?>-pf-results"
+                        class="jsonb-pathfinder-results"
+                        role="listbox"
+                        aria-label="Matching paths"
+                        hidden></ul>
                 </div>
                 <div class="jsonb-output" aria-live="polite"></div>
             </div>
