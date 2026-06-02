@@ -1,1 +1,2 @@
 # wordpress_plugin_json_beautifier
+test
